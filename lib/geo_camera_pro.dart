@@ -6,6 +6,9 @@ export 'src/exceptions/geo_camera_exception.dart';
 export 'src/models/capture_result.dart';
 export 'src/models/geo_camera_config.dart';
 export 'src/models/location_data.dart';
+export 'src/models/sensor_data.dart';
+export 'src/sensors/sensor_manager.dart';
+export 'src/ui/geo_camera_view.dart';
 
 /// Public API for camera capture with continuous GPS tracking.
 class GeoCameraPro extends GeoCameraController {

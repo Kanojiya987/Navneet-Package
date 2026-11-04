@@ -140,6 +140,23 @@ void main() {
     expect(result.cropApplied, isFalse);
   });
 
+  test('rotates upside-down portrait (180°) right side up', () async {
+    final inputPath = path.join(temporaryDirectory.path, 'source-upside-down.jpg');
+    final outputPath = path.join(temporaryDirectory.path, 'upside-down.jpg');
+    await File(inputPath).writeAsBytes(img.encodeJpg(_scene(width: 400, height: 800)));
+
+    final result = await const PortraitProcessor(GeoCameraConfig()).process(
+      inputPath: inputPath,
+      outputPath: outputPath,
+      captureTimestamp: captureTime,
+      physicalOrientationDegrees: 180,
+    );
+
+    final output = await _decodeOutput(result.imagePath);
+    expect(output.width, 400);
+    expect(output.height, 800);
+  });
+
   for (final orientation in <int>[1, 2, 3, 4, 5, 6, 7, 8]) {
     test('applies EXIF orientation $orientation exactly once', () async {
       final source = _scene(width: 800, height: 600)

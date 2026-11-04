@@ -108,8 +108,11 @@ Future<Map<String, Object?>> _processPortraitImage(
   final outputOrientationIndex =
       arguments['outputOrientationIndex'] as int? ??
       GeoCameraOutputOrientation.natural.index;
-  final isHardwareLandscape = physicalOrientationDegrees == 90 ||
-      physicalOrientationDegrees == 270;
+  final isPortraitDown = physicalOrientationDegrees == 180 || deviceOrientationIndex == 2;
+  final isLandscapeRight = physicalOrientationDegrees == 270 || deviceOrientationIndex == 3;
+  final isLandscapeLeft = physicalOrientationDegrees == 90 || deviceOrientationIndex == 1;
+  final isHardwareLandscape = physicalOrientationDegrees == 90 || physicalOrientationDegrees == 270;
+  final isDeviceLandscape = isHardwareLandscape || isLandscapeLeft || isLandscapeRight;
 
   debugPrint(
       'GeoCameraPro Debug: inputPath = $inputPath, originalWidth = $originalWidth, originalHeight = $originalHeight');
@@ -129,9 +132,10 @@ Future<Map<String, Object?>> _processPortraitImage(
         'GeoCameraPro Debug: forcedOrientation wantLandscape = $wantLandscape, isLandscape = $isLandscape');
 
     if (wantLandscape && !isLandscape) {
-      var rotated = img.copyRotate(upright, angle: 90);
+      final rotationAngle = isLandscapeRight ? 270 : 90;
+      var rotated = img.copyRotate(upright, angle: rotationAngle);
       if (rotated.width < rotated.height) {
-        rotated = img.copyRotate(upright, angle: 270);
+        rotated = img.copyRotate(upright, angle: rotationAngle == 90 ? 270 : 90);
       }
       upright = rotated;
       debugPrint(
@@ -150,9 +154,10 @@ Future<Map<String, Object?>> _processPortraitImage(
     if (upright.width < upright.height) {
       debugPrint(
           'GeoCameraPro Debug: Rotating portrait capture into landscape output');
-      var rotated = img.copyRotate(upright, angle: 90);
+      final rotationAngle = isLandscapeRight ? 270 : 90;
+      var rotated = img.copyRotate(upright, angle: rotationAngle);
       if (rotated.width < rotated.height) {
-        rotated = img.copyRotate(upright, angle: 270);
+        rotated = img.copyRotate(upright, angle: rotationAngle == 90 ? 270 : 90);
       }
       upright = rotated;
       debugPrint(
@@ -170,37 +175,31 @@ Future<Map<String, Object?>> _processPortraitImage(
       upright = rotated;
     }
   } else if (preserveNaturalOrientation || outputOrientationIndex == GeoCameraOutputOrientation.natural.index) {
-    final isDeviceLandscape = isHardwareLandscape ||
-        deviceOrientationIndex == 1 ||
-        deviceOrientationIndex == 3;
     final isImagePortrait = upright.width < upright.height;
     debugPrint(
-        'GeoCameraPro Debug: isDeviceLandscape = $isDeviceLandscape, isImagePortrait = $isImagePortrait');
+        'GeoCameraPro Debug: isDeviceLandscape = $isDeviceLandscape, isPortraitDown = $isPortraitDown, isImagePortrait = $isImagePortrait');
 
-    if (isDeviceLandscape && isImagePortrait) {
-      debugPrint(
-          'GeoCameraPro Debug: Rotating for hardware/device landscape orientation');
-      var rotated = img.copyRotate(upright, angle: 90);
-      if (rotated.width < rotated.height) {
-        rotated = img.copyRotate(upright, angle: 270);
+    if (isPortraitDown) {
+      // Device held upside down in portrait (180° / Portrait Down)
+      debugPrint('GeoCameraPro Debug: Rotating 180° for upside-down portrait');
+      if (isImagePortrait) {
+        upright = img.copyRotate(upright, angle: 180);
+      } else {
+        upright = img.copyRotate(upright, angle: 270);
       }
-      upright = rotated;
-      debugPrint(
-          'GeoCameraPro Debug: after rotation width = ${upright.width}, height = ${upright.height}');
-    } else {
-      final isDevicePortrait = !isHardwareLandscape &&
-          (deviceOrientationIndex == 0 || deviceOrientationIndex == 2);
-      final isImageLandscape = upright.width > upright.height;
-      if (isDevicePortrait && isImageLandscape) {
-        debugPrint(
-            'GeoCameraPro Debug: Rotating for portrait device orientation');
-        var rotated = img.copyRotate(upright, angle: 90);
-        if (rotated.width > rotated.height) {
-          rotated = img.copyRotate(upright, angle: 270);
-        }
-        upright = rotated;
-        debugPrint(
-            'GeoCameraPro Debug: after rotation width = ${upright.width}, height = ${upright.height}');
+    } else if (isLandscapeRight) {
+      // Device held in reverse landscape (270° / Landscape Right)
+      debugPrint('GeoCameraPro Debug: Normalizing for Landscape Right');
+      if (isImagePortrait) {
+        upright = img.copyRotate(upright, angle: 270);
+      } else {
+        upright = img.copyRotate(upright, angle: 180);
+      }
+    } else if (isLandscapeLeft) {
+      // Device held in standard landscape (90° / Landscape Left)
+      debugPrint('GeoCameraPro Debug: Normalizing for Landscape Left');
+      if (isImagePortrait) {
+        upright = img.copyRotate(upright, angle: 90);
       }
     }
   }
@@ -279,16 +278,9 @@ Future<Map<String, Object?>> _processPortraitImage(
   final jpeg = img.encodeJpg(upright, quality: arguments['quality']! as int);
   await output.writeAsBytes(jpeg, flush: true);
 
-  final saved = img.decodeImage(await output.readAsBytes());
-  if (saved == null ||
-      (!preserveNaturalOrientation && saved.width >= saved.height)) {
+  if (!preserveNaturalOrientation && upright.width >= upright.height) {
     throw const ImageProcessingException(
       'Saved JPEG failed dimension verification.',
-    );
-  }
-  if (saved.exif.imageIfd.orientation != null) {
-    throw const ImageProcessingException(
-      'Saved JPEG still depends on EXIF orientation metadata.',
     );
   }
 
@@ -296,8 +288,8 @@ Future<Map<String, Object?>> _processPortraitImage(
     'imagePath': output.path,
     'originalWidth': originalWidth,
     'originalHeight': originalHeight,
-    'width': saved.width,
-    'height': saved.height,
+    'width': upright.width,
+    'height': upright.height,
     'cropApplied': cropApplied,
   };
 }

@@ -42,6 +42,7 @@ class MockGeoCameraProPlatform
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   final GeoCameraProPlatform initialPlatform = GeoCameraProPlatform.instance;
 
   test('$MethodChannelGeoCameraPro is the default instance', () {

@@ -10,13 +10,14 @@ import 'package:path_provider/path_provider.dart';
 
 import '../geo_camera_pro_platform_interface.dart';
 import 'camera/camera_manager.dart';
-import 'camera/image_orientation_helper.dart';
 import 'camera/portrait_processor.dart';
 import 'exceptions/geo_camera_exception.dart';
 import 'location/location_manager.dart';
 import 'models/capture_result.dart';
 import 'models/geo_camera_config.dart';
 import 'models/location_data.dart';
+import 'models/sensor_data.dart';
+import 'sensors/sensor_manager.dart';
 
 /// Coordinates camera, background location, and portrait capture workflows.
 class GeoCameraController extends ChangeNotifier with WidgetsBindingObserver {
@@ -24,7 +25,8 @@ class GeoCameraController extends ChangeNotifier with WidgetsBindingObserver {
     : config = config,
       _cameraManager = CameraManager(config),
       _locationManager = LocationManager(config),
-      _portraitProcessor = PortraitProcessor(config) {
+      _portraitProcessor = PortraitProcessor(config),
+      _sensorManager = SensorManager() {
     _locationSubscription = _locationManager.updates.listen(
       _handleLocation,
       onError: _handleLocationError,
@@ -35,6 +37,7 @@ class GeoCameraController extends ChangeNotifier with WidgetsBindingObserver {
   final CameraManager _cameraManager;
   final LocationManager _locationManager;
   final PortraitProcessor _portraitProcessor;
+  final SensorManager _sensorManager;
   final ValueNotifier<bool> _trackingStatus = ValueNotifier<bool>(false);
   final StreamController<GeoCameraException> _errors =
       StreamController<GeoCameraException>.broadcast();
@@ -64,6 +67,12 @@ class GeoCameraController extends ChangeNotifier with WidgetsBindingObserver {
   bool get isInitialized => _isInitialized;
   LocationData? get latestLocation => _locationManager.latestLocation;
 
+  /// Stream of continuous gyroscope, pitch, roll, and compass heading updates.
+  Stream<SensorData> get sensorUpdates => _sensorManager.sensorUpdates;
+
+  /// Latest gyroscope and orientation sensor readings.
+  SensorData get latestSensorData => _sensorManager.latestData;
+
   /// Initializes the rear camera and registers app lifecycle handling.
   Future<void> initialize() {
     _ensureNotDisposed();
@@ -73,12 +82,15 @@ class GeoCameraController extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
+  String? _cachedOutputDirectory;
+
   Future<void> _initializeCamera() async {
     await _cameraManager.initialize();
     if (_isDisposed) {
       await _cameraManager.dispose();
       return;
     }
+    _cachedOutputDirectory ??= await _resolveOutputDirectory();
     final nativeTracking = await _locationManager.restoreTrackingStatus();
     if (_isDisposed) {
       await _cameraManager.dispose();
@@ -124,37 +136,41 @@ class GeoCameraController extends ChangeNotifier with WidgetsBindingObserver {
     final captureCompletion = Completer<void>();
     _captureCompletion = captureCompletion;
     try {
-      final directory = await _resolveOutputDirectory();
+      final directory = _cachedOutputDirectory ?? await _resolveOutputDirectory();
       final capturedAt = DateTime.now().toUtc();
       final deviceOrientation = _cameraManager.controller?.value.deviceOrientation;
-      final physicalDegrees =
-          await GeoCameraProPlatform.instance.getPhysicalOrientationDegrees();
+
+      // Parallel execution of picture capture and physical orientation lookup
+      final takePictureFuture = _cameraManager.takePicture();
+      final physicalDegreesFuture =
+          GeoCameraProPlatform.instance.getPhysicalOrientationDegrees();
+
+      final temporaryFile = await takePictureFuture;
+      final physicalDegrees = await physicalDegreesFuture;
       debugPrint(
           'GeoCameraPro Debug: physicalDegrees = $physicalDegrees, deviceOrientation = $deviceOrientation, forcedOrientation = $orientation');
-      final temporaryFile = await _cameraManager.takePicture();
       debugPrint('GeoCameraPro Debug: temporaryFile path = ${temporaryFile.path}');
-      final correctedFile = await ImageOrientationHelper.fixOrientation(
-        File(temporaryFile.path),
-      );
-      debugPrint('GeoCameraPro Debug: correctedFile path = ${correctedFile.path}');
-      LocationData? location;
+
+      LocationData? location = _locationManager.latestLocation;
       String? gpsError;
-      try {
-        location = await _locationManager.locationForCapture();
-      } on LocationTimeoutException catch (error) {
-        gpsError = error.message;
-        _errors.add(error);
-      } on GeoCameraException catch (error) {
-        gpsError = error.message;
-        _errors.add(error);
-      } catch (error) {
-        final wrapped = GeoCameraException(
-          'Could not obtain a location for this capture.',
-          code: 'location_capture_error',
-          details: error,
-        );
-        gpsError = wrapped.message;
-        _errors.add(wrapped);
+      if (location == null) {
+        try {
+          location = await _locationManager.locationForCapture();
+        } on LocationTimeoutException catch (error) {
+          gpsError = error.message;
+          _errors.add(error);
+        } on GeoCameraException catch (error) {
+          gpsError = error.message;
+          _errors.add(error);
+        } catch (error) {
+          final wrapped = GeoCameraException(
+            'Could not obtain a location for this capture.',
+            code: 'location_capture_error',
+            details: error,
+          );
+          gpsError = wrapped.message;
+          _errors.add(wrapped);
+        }
       }
       if (location == null && gpsError == null) {
         final unavailable = const LocationUnavailableException(
@@ -172,7 +188,7 @@ class GeoCameraController extends ChangeNotifier with WidgetsBindingObserver {
 
       try {
         final processed = await _portraitProcessor.process(
-          inputPath: correctedFile.path,
+          inputPath: temporaryFile.path,
           outputPath: imagePath,
           location: location,
           captureTimestamp: capturedAt,
@@ -209,9 +225,6 @@ class GeoCameraController extends ChangeNotifier with WidgetsBindingObserver {
         );
       } finally {
         await _deleteTemporaryFile(temporaryFile.path);
-        if (correctedFile.path != temporaryFile.path) {
-          await _deleteTemporaryFile(correctedFile.path);
-        }
       }
     } finally {
       _isCapturing = false;
@@ -247,6 +260,7 @@ class GeoCameraController extends ChangeNotifier with WidgetsBindingObserver {
         } finally {
           await _locationSubscription?.cancel();
           await _errors.close();
+          _sensorManager.dispose();
           _trackingStatus.dispose();
         }
       }

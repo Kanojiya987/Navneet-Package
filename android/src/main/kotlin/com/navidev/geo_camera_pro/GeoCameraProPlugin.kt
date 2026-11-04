@@ -38,13 +38,13 @@ class GeoCameraProPlugin :
             override fun onOrientationChanged(orientation: Int) {
                 if (orientation == android.view.OrientationEventListener.ORIENTATION_UNKNOWN) return
                 lastPhysicalOrientationDegrees = if (orientation in 45..134) {
-                    270  // Landscape Right
+                    90   // Landscape Left
                 } else if (orientation in 135..224) {
-                    180 // Portrait Down
+                    180  // Portrait Down
                 } else if (orientation in 225..314) {
-                    90  // Landscape Left
+                    270  // Landscape Right
                 } else {
-                    0   // Portrait Up
+                    0    // Portrait Up
                 }
             }
         }
